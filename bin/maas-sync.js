@@ -16,15 +16,16 @@ auth(config.credentials.username, config.credentials.api_key, function(err, auth
 
 function auth(username, api_key, callback) {
   var
+    creds = auth_credentials(username, api_key),
     options = {
       hostname: 'auth.api.rackspacecloud.com',
       path: 'v2.0/tokens',
       method: 'POST',
       headers: {
-//        'User-Agent': 'maas-in-chains 0.0.0',
-//        'Accept-Encoding': 'gzip,deflate',
+        'User-Agent': 'maas-in-chains 0.0.0',
+        'Accept-Encoding': 'gzip,deflate',
         'Content-Type': 'application/json; charset=UTF-8',
-        'Content-Length': auth_credentials(username, api_key).length + 1,
+        'Content-Length': Buffer.byteLength(creds, 'utf8'),
         'Accept': 'application/json'
       }
     },
@@ -37,17 +38,17 @@ function auth(username, api_key, callback) {
         response += chunk;
       });
       res.on('end', function() {
-        callback(null, JSON.parse(response))
+        callback(null, JSON.parse(response));
       });
     });
 
   req.on('error', function(e) {
     error(e.message);
   });
-console.dir(req);
-console.log(auth_credentials(username, api_key));
-  req.write(auth_credentials(username, api_key) + '\n');
-  req.end();
+
+  console.dir(req);
+  console.log(creds);
+  req.end(creds);
 }
 
 function auth_credentials(username, api_key) {

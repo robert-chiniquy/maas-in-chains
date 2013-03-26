@@ -13,11 +13,13 @@ var
   && config.credentials.api_key
   && config.credentials.tenant_id) || error('Need credentials in ~/.raxrc!');
 
-if (fs.exists(repo_root() + 'manifest.ini')) {
+
+if (fs.existsSync(repo_root() + 'manifest.ini')) {
   var manifest = ini.parse(fs.readFileSync(repo_root() + 'manifest.ini', 'utf-8'));
   if (manifest && manifest.credentials.username !== config.credentials.username) {
     error("The manifest username doesn't match your .raxrc!");
   }
+  process.stdout.write('Updating maas-repo …\n');
   sync_maas_repo(function(err, result) {
     if (err) {
       error(err);
@@ -25,6 +27,7 @@ if (fs.exists(repo_root() + 'manifest.ini')) {
     console.dir(result);
   });
 } else {
+  process.stdout.write('Initializing maas-repo …\n');
   init_maas_repo(function(err, result) {
     if (err) {
       error(err);
@@ -56,9 +59,13 @@ function sync_maas_repo(callback) {
     // need to detect deletes and git rm them
     write_overview_to_local(result.overview);
 
+    if (local_changes()) {
+      sh.exec('git commit -a -m "Applying changes from API"');
+    }
+
     if (!stashed) {
       // no local changes to apply
-      callback();
+      callback(null, 'No local changes to apply to the API.');
       return;
     }
 
@@ -68,12 +75,12 @@ function sync_maas_repo(callback) {
       return;
     }
 
-    write_changes_to_api(result.auth_token, sh.exec('git diff --name-only').split('\n'), function(err, result) {
+    write_changes_to_api(result.auth_token, sh.exec('git diff --name-only').output.split('\n'), function(err, result) {
       if (err) {
         callback(err);
         return;
       }
-      sh.exec('git commit -m "Adding changes from API"');
+      sh.exec('git commit -a -m "Adding local changes"');
       callback(null);
     });
   });
@@ -94,7 +101,8 @@ function init_maas_repo(callback) {
 // return true if the maas_repo has been changed locally
 function local_changes() {
   process.chdir(repo_root());
-  if (sh.exec('git diff | grep -q .').code !== 0) {
+  if (sh.exec('git diff').output.length > 5) { // HACK
+    console.log('local changes found');
     return true;
   }
   return false;
@@ -106,31 +114,32 @@ function path_to_url(path) {
 
   if (parts.length === 2) {
     // entity
-    return '/v1.0/entities/' + parts[0];
+    return '/v1.0/' + config.credentials.tenant_id + '/entities/' + parts[0];
   } else if (parts.length === 3) {
     if (parts[2].match(/^ch/)) {
       // check
-      return '/v1.0/entities/' + parts[0] + '/checks/' + parts[1];
+      return '/v1.0/' + config.credentials.tenant_id + '/entities/' + parts[0] + '/checks/' + parts[1];
     } else {
       // alarm
       var alarm_id = parts[2].replace('.json','');
-      return '/v1.0/entities/' + parts[0] + '/alarms/' + alarm_id;
+      return '/v1.0/' + config.credentials.tenant_id + '/entities/' + parts[0] + '/alarms/' + alarm_id;
     }
   }
 }
 
-function post_file(auth_token, filename, url) {
+function post_file(auth_token, filename, url, callback) {
   var
-    body = fs.readFileSync(filename);
+    body = fs.readFileSync(repo_root() + filename).toString(),
     options = {
       hostname: 'monitoring.api.rackspacecloud.com',
       path: url,
-      method: 'POST',
+      method: 'PUT',
       headers: {
         'User-Agent': 'maas-in-chains 0.0.0',
         'Content-Length': Buffer.byteLength(body, 'utf8'),
         'Accept': 'application/json',
-        'X-Auth-Token': auth_token
+        'X-Auth-Token': auth_token,
+        'X-Tenant-Id': config.credentials.tenant_id
       }
     },
     req = https.request(options, function(res) {
@@ -140,6 +149,7 @@ function post_file(auth_token, filename, url) {
         response += chunk;
       });
       res.on('end', function() {
+        console.log(response);
         callback();
       });
     });
@@ -156,7 +166,13 @@ function write_changes_to_api(auth_token, filenames, callback) {
   //    construct the URL to POST to
   //    POST the file to the URL
   async.forEachLimit(filenames, 4, function updateItem(filename, callback) {
-    post_file(auth_token, filename, url, callback);
+    if (filename) {
+      console.log(repo_root() + filename);
+      console.log(path_to_url(filename));
+      post_file(auth_token, filename, path_to_url(filename), callback);
+    } else {
+      callback();
+    }
   }, callback);
 }
 
